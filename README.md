@@ -110,3 +110,6 @@ Publica a cada 3 segundos em `/desafio/status`:
 ---
 
 > Desenvolvido como parte de um desafio técnico em sistemas embarcados e IoT.
+>
+> <img width="1135" height="769" alt="image" src="https://github.com/user-attachments/assets/06223679-a91d-46db-acab-76d7f9c7b03a" />
+
