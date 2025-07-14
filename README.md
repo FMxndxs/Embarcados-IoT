@@ -1,67 +1,112 @@
 # Embarcados-IoT
-Desafio Técnico - Embarcados/IoT com ESP32
-Este projeto foi desenvolvido como parte do desafio técnico de embarcados/IoT, utilizando o microcontrolador ESP32 e o framework Arduino. O sistema é composto por um sensor DHT22 para medir temperatura e umidade, um LED RGB Neopixel e um botão para interação.
+# Projeto ESP32 - Monitoramento e Controle RGB via MQTT
 
-Objetivo do Projeto
-O objetivo deste projeto é implementar um sistema que:
+Este projeto IoT com ESP32 integra sensores e atuadores com comunicação MQTT para monitoramento de temperatura, umidade e controle de LED RGB com modos e cores definidos.
 
-Monitora a temperatura e umidade.
-Controla um LED RGB com diferentes modos de operação.
-Permite a interação através de um botão.
-Envia dados para um broker MQTT em formato JSON.
-Recebe comandos via MQTT para alterar o estado do LED.
-Hardware Necessário
-Microcontrolador ESP32 (preferencialmente S3)
-Sensor DHT22 de temperatura e umidade
-LED RGB Neopixel
-Pushbutton (botão)
-Fios de conexão
-Configurações de Hardware
-DHT22: Conectado ao pino 23 do ESP32.
-Botão: Conectado ao pino 21 do ESP32 (configurado com pull-up).
-LED RGB: Conectado ao pino 17 do ESP32.
-Configurações de Software
-Bibliotecas Necessárias
-Arduino.h
-DHT.h
-Adafruit_NeoPixel.h
-WiFi.h
-PubSubClient.h
-Configurações de MQTT/WiFi
-SSID: BAD BOYS
-Senha: 22780694
-Broker MQTT: broker.hivemq.com
-Porta MQTT: 1883
-Tópico de Status: /desafio/status
-Tópico de Comando: /desafio/comando
-Tarefas Implementadas
-Gerenciamento do LED RGB: Controla o estado e a cor do LED.
-Gerenciamento do Sensor de Temperatura e Umidade: Lê e atualiza os valores de temperatura e umidade.
-Gerenciamento do Pushbutton: Detecta pressionamentos rápidos e longos para alterar o estado do LED.
-Relatório de Estados: Envia dados de temperatura, umidade e estado do LED a cada 3 segundos via MQTT.
-Como Compilar e Testar
-Clone o Repositório:
+## Requisitos de Hardware
 
-bash
+* ESP32 DevKit V1
+* Sensor DHT22
+* Botão pushbutton
+* Anel NeoPixel (24 LEDs RGB)
+* Jumpers e protoboard
 
-Run
-Copy code
-git clone <link-do-repositorio>
-cd <nome-do-repositorio>
-Abra o Projeto no Arduino IDE:
+## Conexões de Hardware
 
-Certifique-se de que as bibliotecas necessárias estão instaladas.
-Abra o arquivo main.ino ou sketch.ino.
-Configuração do Ambiente:
+| Componente | GPIO (ESP32) | Observação           |
+| ---------- | ------------ | -------------------- |
+| DHT22      | GPIO 23      | Pino de dados        |
+| NeoPixel   | GPIO 17      | Entrada de dados DIN |
+| Botão      | GPIO 21      | Usando INPUT\_PULLUP |
 
-Conecte o ESP32 ao computador.
-Selecione a placa correta no Arduino IDE.
-Carregar o Código:
+> Todos os VCC conectados ao 3V3 e GND ao GND do ESP32.
 
-Clique em "Upload" para compilar e carregar o código no ESP32.
-Monitor Serial:
+## Como compilar e testar
 
-Abra o Monitor Serial (115200 bps) para visualizar os dados de conexão e os relatórios de estado.
-Notas Finais
-Certifique-se de que o circuito está montado corretamente conforme a imagem do circuito.
-O código foi testado no ambiente Wokwi, mas recomenda-se testar em um dispositivo físico para garantir a funcionalidade completa.
+### 1. Ambiente de desenvolvimento
+
+Use a IDE Arduino com as seguintes configurações:
+
+* Placa: "ESP32 Dev Module"
+* Velocidade: 115200
+* Biblioteca adicionais:
+
+  * `DHT sensor library` (Adafruit)
+  * `Adafruit NeoPixel`
+  * `PubSubClient`
+
+### 2. Instalação de bibliotecas
+
+Abra o **Gerenciador de Bibliotecas** e instale:
+
+* `DHT sensor library by Adafruit`
+* `Adafruit NeoPixel`
+* `PubSubClient by Nick O'Leary`
+
+### 3. Rede Wi-Fi e MQTT
+
+O dispositivo se conecta a:
+
+* Wi-Fi SSID: `BAD BOYS`
+* Senha: `22780694`
+* Broker MQTT: `broker.hivemq.com`
+
+> Certifique-se de que a rede é 2.4GHz, pois o ESP32 não suporta 5GHz.
+
+### 4. Upload do sketch
+
+* Copie o código principal para o arquivo `.ino`
+* Conecte o ESP32 via USB
+* Selecione a porta correta
+* Clique em **Upload**
+
+### 5. Monitoramento
+
+* Abra o **Serial Monitor** (115200 baud rate)
+* Observe a conexão Wi-Fi e publicação de JSON
+* Pressione o botão:
+
+  * Pressão curta: alterna o modo do LED
+  * Pressão longa (> 3s): muda a cor
+
+### 6. Comandos via MQTT
+
+Envie comandos para `/desafio/comando`:
+
+* Mudar modo:
+
+  ```
+  mode:2
+  ```
+* Mudar cor:
+
+  ```
+  color:255,0,0
+  ```
+
+### 7. JSON de status
+
+Publica a cada 3 segundos em `/desafio/status`:
+
+```json
+{"temp":26.5, "hum":60.0, "mode":2, "color":16711680}
+```
+
+## Funções principais
+
+| Tarefa         | Função         | Core |
+| -------------- | -------------- | ---- |
+| LED RGB        | `ledTask()`    | 1    |
+| Sensor DHT22   | `sensorTask()` | 1    |
+| Botão          | `buttonTask()` | 0    |
+| Relatório MQTT | `reportTask()` | 0    |
+
+## Observações
+
+* O projeto é compatível com Wokwi, desde que o Wokwi Gateway esteja ativo na máquina local
+* Utilize apenas redes 2.4GHz
+* Caso deseje simular, comente os blocos `WiFi.begin()` e `mqtt.connect()` e use apenas o `Serial.println(json)`
+
+---
+
+> Desenvolvido como parte de um desafio técnico em sistemas embarcados e IoT.
