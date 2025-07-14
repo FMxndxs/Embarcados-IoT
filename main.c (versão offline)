@@ -1,0 +1,124 @@
+#include <Arduino.h>
+#include <DHT.h>
+#include <Adafruit_NeoPixel.h>
+
+// ------------------- CONFIGURAÇÕES DE HARDWARE -------------------
+#define DHTPIN        23       // Pino DATA do DHT22
+#define DHTTYPE       DHT22
+#define BUTTON_PIN    21       // Botão (com pull-up interno)
+#define LED_PIN       17       // NeoPixel DIN
+#define NUMPIXELS     24       // Número de LEDs no anel
+
+// ------------------- OBJETOS GLOBAIS -------------------
+DHT dht(DHTPIN, DHTTYPE);
+Adafruit_NeoPixel pixels(NUMPIXELS, LED_PIN, NEO_GRB + NEO_KHZ800);
+SemaphoreHandle_t stateMutex;
+
+float temperature = 0;
+float humidity = 0;
+uint32_t currentColor = 0;
+int ledMode = 0; // 0=off,1=on,2=blink1s,3=blink03s
+
+uint32_t nextColor(uint32_t color) {
+  if (color == pixels.Color(0,255,0)) return pixels.Color(255,255,0);
+  if (color == pixels.Color(255,255,0)) return pixels.Color(255,0,0);
+  if (color == pixels.Color(255,0,0)) return pixels.Color(0,0,255);
+  return pixels.Color(0,255,0);
+}
+
+void ledTask(void* pvParameters) {
+  TickType_t lastWake = xTaskGetTickCount();
+  while(true) {
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    uint32_t col = currentColor;
+    int mode = ledMode;
+    xSemaphoreGive(stateMutex);
+
+    switch(mode) {
+      case 0: pixels.clear(); pixels.show(); break;
+      case 1: pixels.fill(col); pixels.show(); break;
+      case 2: pixels.fill(col); pixels.show(); vTaskDelay(pdMS_TO_TICKS(500));
+              pixels.clear(); pixels.show(); vTaskDelay(pdMS_TO_TICKS(500)); continue;
+      case 3: pixels.fill(col); pixels.show(); vTaskDelay(pdMS_TO_TICKS(150));
+              pixels.clear(); pixels.show(); vTaskDelay(pdMS_TO_TICKS(150)); continue;
+    }
+    vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(100));
+  }
+}
+
+void sensorTask(void* pvParameters) {
+  while(true) {
+    float t = dht.readTemperature();
+    float h = dht.readHumidity();
+    if (!isnan(t) && !isnan(h)) {
+      xSemaphoreTake(stateMutex, portMAX_DELAY);
+      temperature = t;
+      humidity = h;
+      xSemaphoreGive(stateMutex);
+    }
+    vTaskDelay(pdMS_TO_TICKS(2000));
+  }
+}
+
+void handleButtonPress(unsigned long duration) {
+  xSemaphoreTake(stateMutex, portMAX_DELAY);
+  if (duration < 1000) {
+    ledMode = (ledMode + 1) % 4;
+  } else if (duration > 3000) {
+    currentColor = nextColor(currentColor);
+  }
+  xSemaphoreGive(stateMutex);
+}
+
+volatile unsigned long pressStart = 0;
+void IRAM_ATTR onButton() {
+  if (digitalRead(BUTTON_PIN) == LOW) {
+    pressStart = millis();
+  } else {
+    unsigned long duration = millis() - pressStart;
+    xTaskCreatePinnedToCore([](void* param) {
+      unsigned long dur = *(unsigned long*)param;
+      handleButtonPress(dur);
+      vTaskDelete(NULL);
+    }, "BtnHandler", 2048, &duration, 2, NULL, 0);
+  }
+}
+
+void buttonTask(void* pvParameters) {
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  attachInterrupt(BUTTON_PIN, onButton, CHANGE);
+  while(true) vTaskDelay(pdMS_TO_TICKS(10000));
+}
+
+void reportTask(void* pvParameters) {
+  while(true) {
+    xSemaphoreTake(stateMutex, portMAX_DELAY);
+    float t = temperature;
+    float h = humidity;
+    uint32_t col = currentColor;
+    int mode = ledMode;
+    xSemaphoreGive(stateMutex);
+
+    Serial.printf("{\"temp\":%.1f, \"hum\":%.1f, \"mode\":%d, \"color\":%lu}\n", t, h, mode, col);
+
+    vTaskDelay(pdMS_TO_TICKS(3000));
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  dht.begin();
+  pixels.begin();
+  currentColor = pixels.Color(0,255,0);
+
+  stateMutex = xSemaphoreCreateMutex();
+
+  xTaskCreatePinnedToCore(ledTask, "LED", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(sensorTask, "Sensor", 4096, NULL, 1, NULL, 1);
+  xTaskCreatePinnedToCore(buttonTask, "Button", 2048, NULL, 2, NULL, 0);
+  xTaskCreatePinnedToCore(reportTask, "Report", 4096, NULL, 1, NULL, 0);
+}
+
+void loop() {
+  // Sem WiFi/MQTT nesse modo de teste
+}
