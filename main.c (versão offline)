@@ -3,11 +3,11 @@
 #include <Adafruit_NeoPixel.h>
 
 // ------------------- CONFIGURAÇÕES DE HARDWARE -------------------
-#define DHTPIN        23       // Pino DATA do DHT22
+#define DHTPIN        23
 #define DHTTYPE       DHT22
-#define BUTTON_PIN    21       // Botão (com pull-up interno)
-#define LED_PIN       17       // NeoPixel DIN
-#define NUMPIXELS     24       // Número de LEDs no anel
+#define BUTTON_PIN    21
+#define LED_PIN       17
+#define NUMPIXELS     24
 
 // ------------------- OBJETOS GLOBAIS -------------------
 DHT dht(DHTPIN, DHTTYPE);
@@ -16,40 +16,63 @@ SemaphoreHandle_t stateMutex;
 
 float temperature = 0;
 float humidity = 0;
-uint32_t currentColor = 0;
-int ledMode = 0; // 0=off,1=on,2=blink1s,3=blink03s
+uint32_t currentColor;
+int ledMode = 1; // Modo ligado por padrão
 
+// Função para avançar a cor
 uint32_t nextColor(uint32_t color) {
-  if (color == pixels.Color(0,255,0)) return pixels.Color(255,255,0);
-  if (color == pixels.Color(255,255,0)) return pixels.Color(255,0,0);
-  if (color == pixels.Color(255,0,0)) return pixels.Color(0,0,255);
-  return pixels.Color(0,255,0);
+  if (color == pixels.Color(0, 255, 0))      return pixels.Color(255, 255, 0); // verde -> amarelo
+  else if (color == pixels.Color(255, 255, 0)) return pixels.Color(255, 0, 0);   // amarelo -> vermelho
+  else if (color == pixels.Color(255, 0, 0))   return pixels.Color(0, 0, 255);   // vermelho -> azul
+  else                                         return pixels.Color(0, 255, 0);   // azul -> verde
 }
 
+// Tarefa que controla LEDs
 void ledTask(void* pvParameters) {
   TickType_t lastWake = xTaskGetTickCount();
-  while(true) {
+  while (true) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     uint32_t col = currentColor;
     int mode = ledMode;
     xSemaphoreGive(stateMutex);
 
-    switch(mode) {
-      case 0: pixels.clear(); pixels.show(); break;
-      case 1: pixels.fill(col); pixels.show(); break;
-      case 2: pixels.fill(col); pixels.show(); vTaskDelay(pdMS_TO_TICKS(500));
-              pixels.clear(); pixels.show(); vTaskDelay(pdMS_TO_TICKS(500)); continue;
-      case 3: pixels.fill(col); pixels.show(); vTaskDelay(pdMS_TO_TICKS(150));
-              pixels.clear(); pixels.show(); vTaskDelay(pdMS_TO_TICKS(150)); continue;
+    switch (mode) {
+      case 0: // LEDs desligados
+        pixels.clear();
+        pixels.show();
+        break;
+      case 1: // LEDs ligados fixos
+        pixels.fill(col);
+        pixels.show();
+        break;
+      case 2: // Pisca lento
+        pixels.fill(col);
+        pixels.show();
+        vTaskDelay(pdMS_TO_TICKS(500));
+        pixels.clear();
+        pixels.show();
+        vTaskDelay(pdMS_TO_TICKS(500));
+        continue; // Reinicia o ciclo sem delay extra
+      case 3: // Pisca rápido
+        pixels.fill(col);
+        pixels.show();
+        vTaskDelay(pdMS_TO_TICKS(150));
+        pixels.clear();
+        pixels.show();
+        vTaskDelay(pdMS_TO_TICKS(150));
+        continue;
     }
     vTaskDelayUntil(&lastWake, pdMS_TO_TICKS(100));
   }
 }
 
+// Tarefa para leitura do sensor DHT22
 void sensorTask(void* pvParameters) {
-  while(true) {
+  while (true) {
     float t = dht.readTemperature();
     float h = dht.readHumidity();
+
+    // Atualiza se leituras são válidas
     if (!isnan(t) && !isnan(h)) {
       xSemaphoreTake(stateMutex, portMAX_DELAY);
       temperature = t;
@@ -60,38 +83,63 @@ void sensorTask(void* pvParameters) {
   }
 }
 
+// Tratamento do botão via tarefa (evitar trabalho na ISR)
 void handleButtonPress(unsigned long duration) {
   xSemaphoreTake(stateMutex, portMAX_DELAY);
   if (duration < 1000) {
+    // Pressão curta: muda modo LED
     ledMode = (ledMode + 1) % 4;
+    Serial.println(">>> Botão pressionado curto: mudando modo do LED");
   } else if (duration > 3000) {
+    // Pressão longa: muda cor LED
     currentColor = nextColor(currentColor);
+    Serial.println(">>> Botão pressionado longo: mudando cor do LED");
   }
   xSemaphoreGive(stateMutex);
 }
 
 volatile unsigned long pressStart = 0;
+volatile bool buttonPressed = false;
+portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED; // para sincronizar ISR
+
+// ISR para o botão
 void IRAM_ATTR onButton() {
+  portENTER_CRITICAL_ISR(&mux);
   if (digitalRead(BUTTON_PIN) == LOW) {
-    pressStart = millis();
+    if (!buttonPressed) { // só registra se não estava pressionado
+      pressStart = millis();
+      buttonPressed = true;
+    }
   } else {
-    unsigned long duration = millis() - pressStart;
-    xTaskCreatePinnedToCore([](void* param) {
-      unsigned long dur = *(unsigned long*)param;
-      handleButtonPress(dur);
-      vTaskDelete(NULL);
-    }, "BtnHandler", 2048, &duration, 2, NULL, 0);
+    if (buttonPressed) {
+      unsigned long duration = millis() - pressStart;
+      buttonPressed = false;
+
+      // Cria tarefa para tratar botão fora da ISR
+      unsigned long* durCopy = new unsigned long(duration);
+      xTaskCreatePinnedToCore([](void* param) {
+        unsigned long dur = *((unsigned long*)param);
+        delete (unsigned long*)param;
+        handleButtonPress(dur);
+        vTaskDelete(NULL);
+      }, "BtnHandler", 2048, durCopy, 2, NULL, 0);
+    }
   }
+  portEXIT_CRITICAL_ISR(&mux);
 }
 
+// Tarefa que inicializa o botão e aguarda (para não bloquear a main)
 void buttonTask(void* pvParameters) {
   pinMode(BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(BUTTON_PIN, onButton, CHANGE);
-  while(true) vTaskDelay(pdMS_TO_TICKS(10000));
+  while (true) {
+    vTaskDelay(pdMS_TO_TICKS(10000));
+  }
 }
 
+// Tarefa que faz relatório serial do estado
 void reportTask(void* pvParameters) {
-  while(true) {
+  while (true) {
     xSemaphoreTake(stateMutex, portMAX_DELAY);
     float t = temperature;
     float h = humidity;
@@ -99,17 +147,24 @@ void reportTask(void* pvParameters) {
     int mode = ledMode;
     xSemaphoreGive(stateMutex);
 
-    Serial.printf("{\"temp\":%.1f, \"hum\":%.1f, \"mode\":%d, \"color\":%lu}\n", t, h, mode, col);
-
+    Serial.printf("{\"temp\":%.1f, \"hum\":%.1f, \"mode\":%d, \"color\":\"#%06X\"}\n",
+                  t, h, mode, col & 0xFFFFFF);
     vTaskDelay(pdMS_TO_TICKS(3000));
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  delay(1500); // Aguarda sensor DHT estabilizar
+
   dht.begin();
   pixels.begin();
-  currentColor = pixels.Color(0,255,0);
+  pixels.clear();
+  pixels.show();
+
+  currentColor = pixels.Color(0, 255, 0); // Começa em verde
+  pixels.fill(currentColor);
+  pixels.show();
 
   stateMutex = xSemaphoreCreateMutex();
 
@@ -120,5 +175,5 @@ void setup() {
 }
 
 void loop() {
-  // Sem WiFi/MQTT nesse modo de teste
+  // Nada a fazer no loop pois tudo está em tarefas
 }
